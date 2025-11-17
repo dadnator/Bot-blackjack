@@ -1,13 +1,19 @@
-import discord
+Import discord
 from discord.ext import commands, tasks
 from discord import app_commands
+from keep_alive import keep_alive
 import asyncio
 import random
 import json
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+
+# --- CONFIGURATION & CONSTANTES ---
+token = os.environ['TOKEN_BOT_DISCORD']
+
 GUILD_ID = 1295468215681679481  # ⬅️ Replace this with your real Discord server ID
+LOG_CHANNEL_ID = 1297672202657271818  # ⬅️ Remplacer par l'ID de votre salon de log
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -26,8 +32,6 @@ async def on_ready():
     # Now sync only your guild commands
     await bot.tree.sync(guild=guild)
 
-
-
 # Fichier de sauvegarde des données
 DATA_FILE = "blackjack_data.json"
 
@@ -35,6 +39,17 @@ DATA_FILE = "blackjack_data.json"
 active_duels = {}     # {message_id: {"creator": user, "mise": int, "players": [], "max_players": 4}}
 active_games = {}     # {game_id: BlackjackGame object}
 player_stats = {}     # {user_id: {"kamas_joues": int, "kamas_gagnes": int, "parties_gagnees": int, "parties_perdues": int}}
+
+def charger_donnees():
+    global player_stats
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r') as f:
+            data = json.load(f)
+            player_stats = data.get("player_stats", {})
+
+def sauvegarder_donnees():
+    with open(DATA_FILE, 'w') as f:
+        json.dump({"player_stats": player_stats}, f, indent=4)
 
 def get_user_stats(user_id):
     """Retourne les stats d'un joueur, initialise si nécessaire."""
@@ -274,9 +289,10 @@ class GameButtonTirer(discord.ui.Button):
             await interaction.response.edit_message(embed=embed, view=view)
         else:
             game.jouer_croupier()
-            await self.fin_de_partie(interaction, game)
+            # On passe l'ID du salon pour le log
+            await self.fin_de_partie(interaction, game, LOG_CHANNEL_ID) 
 
-    async def fin_de_partie(self, interaction, game):
+    async def fin_de_partie(self, interaction: discord.Interaction, game: BlackjackGame, log_channel_id: int):
         gagnants = game.determiner_gagnants()
         if gagnants:
             gain_par_joueur = int(game.pot_total * 0.95 / len(gagnants))
@@ -294,6 +310,30 @@ class GameButtonTirer(discord.ui.Button):
             else:
                 stats["parties_perdues"] += 1
 
+        # --- Partie Log du résultat (NON-EMBED) ---
+        log_channel = bot.get_channel(log_channel_id)
+        if log_channel:
+            # Création du message de log
+            joueurs_noms = ", ".join([p.display_name for p in game.players])
+            
+            if gagnants:
+                gagnants_noms = ", ".join([g.display_name for g in gagnants])
+                resultat_log = f"🎉 **VICTOIRE** : **{gagnants_noms}** remportent chacun **{gain_par_joueur:,} K**."
+            elif any(game.scores[p.id] == game.croupier_score and game.scores[p.id] <= 21 for p in game.players):
+                 resultat_log = "🤝 **ÉGALITÉ** : Quelques joueurs ont fait Push (score égal au Croupier)."
+            else:
+                resultat_log = "❌ **PERDU** : Aucun joueur n'a gagné."
+            
+            # Message sans "Mise totale" et "Main du Croupier"
+            message_log = (
+                f"--- **Résultat Duel Blackjack** ---\n"
+                f"**Participants** ({len(game.players)}) : {joueurs_noms}\n"
+                f"**Mise par joueur** : {list(game.mises.values())[0]:,} K\n"
+                f"{resultat_log}"
+            )
+            await log_channel.send(message_log)
+
+        # --- Mise à jour de l'interface dans le salon de jeu (EMBED) ---
         embed = self.creer_embed_fin(game, gagnants, gain_par_joueur, gain_croupier)
         await interaction.response.edit_message(embed=embed, view=None)
 
@@ -389,7 +429,7 @@ class GameButtonRester(discord.ui.Button):
         if joueur_suivant:
             await interaction.response.edit_message(embed=embed, view=view)
         else:
-            await button_tirer.fin_de_partie(interaction, game)
+            await button_tirer.fin_de_partie(interaction, game, LOG_CHANNEL_ID)
 
 class GameView(discord.ui.View):
     def __init__(self, game_id):
@@ -398,7 +438,21 @@ class GameView(discord.ui.View):
         self.add_item(GameButtonRester(game_id))
 
 
-# ... (le reste du code reste identique: charger_donnees, sauvegarder_donnees, reset_stats_hebdo, on_ready, get_user_stats)
+# --- Tâches et initialisation ---
+@tasks.loop(hours=24)
+async def reset_stats_hebdo():
+    # Logique de réinitialisation des stats
+    pass
+
+@reset_stats_hebdo.before_loop
+async def before_reset_stats_hebdo():
+    # Logique pour attendre le bon moment (Lundi 00:00)
+    pass
+
+charger_donnees()
+reset_stats_hebdo.start()
+
+# ... (Commandes /duel, /start, /quitte, /stats, /duels_actifs restent inchangées)
 
 @bot.tree.command(name="duel", description="Créer un duel de blackjack avec une mise", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(mise="La mise en kamas que vous voulez jouer")
@@ -579,8 +633,4 @@ async def duels_actifs(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 if __name__ == "__main__":
-    bot.run("")
-
-
-
-
+    bot.run("YOUR_BOT_TOKEN")
