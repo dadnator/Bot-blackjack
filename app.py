@@ -579,7 +579,7 @@ async def duels_actifs(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 if __name__ == "__main__":
-    bot.run("MTM0Mzg5MDkyNDQxMjg2NjYyMQ.GbKgKQ.H0IXvF04iqF4kAk3P0QdefjtPISSNvzzV5o_FU")
+    bot.run("")
 
 
 
