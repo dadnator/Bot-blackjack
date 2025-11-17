@@ -207,7 +207,7 @@ class DuelButton(discord.ui.Button):
 
         embed.add_field(name="👤 Créateur", value=f"{duel_data['creator'].display_name}", inline=True)
         embed.add_field(name="💰 Mise", value=f"{duel_data['mise']:,} K", inline=True)
-        embed.add_field(name="👥 Joueurs", value=f"{len(duel_data['players']) + 1}/{duel_data['max_players']}", inline=True)
+        embed.add_field(name="👥 Joueurs", value=f"{len(duel_data["players"]) + 1}/{duel_data['max_players']}", inline=True)
 
         joueurs_liste = [f"• {duel_data['creator'].display_name} 👑"] + [f"• {player.display_name}" for player in duel_data["players"]]
         embed.add_field(
@@ -389,9 +389,9 @@ async def handle_fin_de_partie(interaction: discord.Interaction, game: Blackjack
     sauvegarder_donnees()
 
 
-    # 🚀 LOGIQUE DE RELANCE AUTOMATIQUE 🚀
-    if not gagnants and not any(game.scores[p.id] == game.croupier_score and game.scores[p.id] <= 21 for p in game.players):
-        # La relance se fait si AUCUN joueur n'a gagné ET si AUCUN joueur n'a fait 'Push' (égalité)
+    # 🚀 LOGIQUE DE RELANCE AUTOMATIQUE (MISE À JOUR) 🚀
+    # La relance se fait si AUCUN joueur n'a gagné (inclut les cas 'Croupier Gagne' et 'Égalité Générale')
+    if not gagnants:
         
         mise_recommencee = list(game.mises.values())[0]
         joueurs_recommences = game.players
@@ -412,28 +412,31 @@ async def handle_fin_de_partie(interaction: discord.Interaction, game: Blackjack
         view_nouvelle_partie = GameView(new_game.game_id)
         
         # 1. Afficher le résultat de la partie FINIE
-        # Si l'interaction a déjà répondu (bouton Tirer/Rester), on édite le message actuel
         if is_response_done:
             await interaction.message.edit(embed=embed_fin, view=None)
             
+            # Message ajusté pour couvrir le cas 'Push' aussi
+            message_content = "🔄 **RELANCE AUTOMATIQUE** : La partie est finie (Croupier gagnant ou Égalité). Nouvelle partie lancée immédiatement!"
+            
             # 2. Afficher la nouvelle partie juste après dans un nouveau message
             await interaction.channel.send(
-                content="🔄 **RELANCE AUTOMATIQUE** : Le croupier a gagné. Nouvelle partie lancée immédiatement!",
+                content=message_content,
                 embed=embed_nouvelle_partie,
                 view=view_nouvelle_partie
             )
         else:
-            # Si l'interaction n'a pas encore répondu (cas de fin de partie venant du /start), 
-            # on répond directement avec le résultat, puis on envoie la nouvelle partie après.
             await interaction.response.edit_message(embed=embed_fin, view=None)
+            
+            message_content = "🔄 **RELANCE AUTOMATIQUE** : La partie est finie (Croupier gagnant ou Égalité). Nouvelle partie lancée immédiatement!"
+            
             await interaction.channel.send(
-                content="🔄 **RELANCE AUTOMATIQUE** : Le croupier a gagné. Nouvelle partie lancée immédiatement!",
+                content=message_content,
                 embed=embed_nouvelle_partie,
                 view=view_nouvelle_partie
             )
             
     else:
-        # Si des joueurs ont gagné ou s'il y a eu un 'Push', le jeu s'arrête
+        # Si des joueurs ont gagné (gagnants non vide), le jeu s'arrête
         if is_response_done:
             await interaction.message.edit(embed=embed_fin, view=None)
         else:
