@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 
 # --- CONFIGURATION & CONSTANTES ---
 # Assurez-vous que 'TOKEN_BOT_DISCORD' est défini dans vos variables d'environnement
+# NOTE: Le token doit être défini dans l'environnement du serveur de déploiement (comme Render ou Replit)
 token = os.environ['TOKEN_BOT_DISCORD']
 
 # Remplacer les IDs par vos IDs réels
@@ -131,9 +132,6 @@ class BlackjackGame:
     def tirer_carte_joueur(self, player_id):
         self.hands[player_id].append(self.tirer_carte())
         return self.calculer_score(player_id)
-
-    def tous_joueurs_ont_joue(self):
-        return all(self.stands[player.id] or self.scores[player.id] >= 21 for player in self.players)
 
     def jouer_croupier(self):
         # Le croupier tire jusqu'à avoir au moins 17 (prise en compte des As)
@@ -266,7 +264,7 @@ def creer_embed_game(game: BlackjackGame, joueur_suivant: Optional[discord.Membe
     return embed
 
 def creer_embed_fin(game: BlackjackGame, gagnants: List[discord.Member], gain_par_joueur: int, gain_croupier: int):
-    embed = discord.Embed(title="🎲 TABLE DE BLACKJACK - FIN DE PARTIE", color=0x00ff00)
+    embed = discord.Embed(title="🎲 TABLE DE BLACKJACK - FIN DE PARTIE", color=0x00ff00 if gagnants else 0xff0000)
 
     # Main finale du croupier
     embed.add_field(
@@ -282,7 +280,7 @@ def creer_embed_fin(game: BlackjackGame, gagnants: List[discord.Member], gain_pa
             statut = f"🎉 Gagnant! (+{gain_par_joueur:,} K)"
         elif game.scores[player.id] > 21:
             statut = "💥 Dépassé!"
-        elif game.scores[player.id] == game.croupier_score:
+        elif game.scores[player.id] == game.croupier_score and game.scores[player.id] <= 21:
             statut = "🤝 Égalité (Push)"
         elif game.croupier_blackjack and game.natural_blackjack[player.id]:
              statut = "🤝 Égalité (Double BJ)" # Cas BJ vs BJ croupier
@@ -313,13 +311,13 @@ def creer_embed_fin(game: BlackjackGame, gagnants: List[discord.Member], gain_pa
         )
         embed.add_field(
             name="🏦 Croupier Récupère",
-            value=f"**{gain_croupier:,} K**",
+            value=f"**{gain_croupier:,} K** (Commission)",
             inline=True
         )
     else:
         embed.add_field(
             name="❌ Croupier Gagne",
-            value=f"Le croupier remporte le pot total de **{game.pot_total:,} K**",
+            value=f"Le croupier remporte le pot total de **{gain_croupier:,} K**",
             inline=True
         )
 
@@ -333,9 +331,12 @@ async def handle_fin_de_partie(interaction: discord.Interaction, game: Blackjack
     pot_a_distribuer = game.pot_total - commission
     
     if gagnants:
+        # Gain par joueur gagnant
         gain_par_joueur = int(pot_a_distribuer / len(gagnants))
-        gain_croupier = commission + (pot_a_distribuer - (gain_par_joueur * len(gagnants))) # Reste non distribuable + commission
+        # Reste de la commission + ce qui n'a pu être distribué
+        gain_croupier = commission + (pot_a_distribuer - (gain_par_joueur * len(gagnants)))
     else:
+        # Le croupier gagne le pot total (ou c'est un push général)
         gain_par_joueur = 0
         gain_croupier = game.pot_total
 
@@ -377,16 +378,66 @@ async def handle_fin_de_partie(interaction: discord.Interaction, game: Blackjack
         await log_channel.send(message_log)
 
     # --- Mise à jour de l'interface de jeu ---
-    embed = creer_embed_fin(game, gagnants, gain_par_joueur, gain_croupier)
-    # Vérifier si l'interaction a déjà été répondue pour utiliser 'followup.send'
-    if interaction.response.is_done():
-        await interaction.followup.send(embed=embed, view=None)
-    else:
-        await interaction.response.edit_message(embed=embed, view=None)
-
+    embed_fin = creer_embed_fin(game, gagnants, gain_par_joueur, gain_croupier)
+    
+    # Stocker l'information si l'interaction a déjà été répondue
+    is_response_done = interaction.response.is_done()
+    
+    # Nettoyage de l'ancienne partie
     if game.game_id in active_games:
         del active_games[game.game_id]
     sauvegarder_donnees()
+
+
+    # 🚀 LOGIQUE DE RELANCE AUTOMATIQUE 🚀
+    if not gagnants and not any(game.scores[p.id] == game.croupier_score and game.scores[p.id] <= 21 for p in game.players):
+        # La relance se fait si AUCUN joueur n'a gagné ET si AUCUN joueur n'a fait 'Push' (égalité)
+        
+        mise_recommencee = list(game.mises.values())[0]
+        joueurs_recommences = game.players
+        
+        # Créer la nouvelle partie
+        new_game = BlackjackGame(joueurs_recommences, mise_recommencee)
+        new_game.distribuer_cartes_initiales()
+        active_games[new_game.game_id] = new_game
+        
+        # Avancer l'index pour gérer le Blackjack Naturel dans la nouvelle partie
+        new_joueur_actuel = new_game.joueur_actuel()
+        if new_joueur_actuel and new_game.stands[new_joueur_actuel.id]:
+            new_game.joueur_suivant()
+        new_joueur_actuel = new_game.joueur_actuel()
+        
+        # Créer la nouvelle interface de jeu
+        embed_nouvelle_partie = creer_embed_game(new_game, new_joueur_actuel)
+        view_nouvelle_partie = GameView(new_game.game_id)
+        
+        # 1. Afficher le résultat de la partie FINIE
+        # Si l'interaction a déjà répondu (bouton Tirer/Rester), on édite le message actuel
+        if is_response_done:
+            await interaction.message.edit(embed=embed_fin, view=None)
+            
+            # 2. Afficher la nouvelle partie juste après dans un nouveau message
+            await interaction.channel.send(
+                content="🔄 **RELANCE AUTOMATIQUE** : Le croupier a gagné. Nouvelle partie lancée immédiatement!",
+                embed=embed_nouvelle_partie,
+                view=view_nouvelle_partie
+            )
+        else:
+            # Si l'interaction n'a pas encore répondu (cas de fin de partie venant du /start), 
+            # on répond directement avec le résultat, puis on envoie la nouvelle partie après.
+            await interaction.response.edit_message(embed=embed_fin, view=None)
+            await interaction.channel.send(
+                content="🔄 **RELANCE AUTOMATIQUE** : Le croupier a gagné. Nouvelle partie lancée immédiatement!",
+                embed=embed_nouvelle_partie,
+                view=view_nouvelle_partie
+            )
+            
+    else:
+        # Si des joueurs ont gagné ou s'il y a eu un 'Push', le jeu s'arrête
+        if is_response_done:
+            await interaction.message.edit(embed=embed_fin, view=None)
+        else:
+            await interaction.response.edit_message(embed=embed_fin, view=None)
     
 class GameButtonTirer(discord.ui.Button):
     def __init__(self, game_id):
@@ -411,8 +462,6 @@ class GameButtonTirer(discord.ui.Button):
             game.stands[interaction.user.id] = True
             game.joueur_suivant() # Passe au joueur suivant
         
-        # Le joueur actuel est soit le joueur qui vient de tirer (s'il est < 21), 
-        # soit le joueur suivant (s'il vient de se mettre en stand)
         joueur_suivant = game.joueur_actuel() 
 
         await self.mettre_a_jour_interface(interaction, game, joueur_suivant)
@@ -492,11 +541,7 @@ async def before_reset_stats_hebdo():
 async def on_ready():
     guild = discord.Object(id=GUILD_ID)
 
-    # Clear global commands (one-time clean)
-    # await bot.tree.clear_commands(guild=None) # Décommenter si vous voulez vraiment effacer
-    await bot.tree.sync()                      # Sync global pour effacer/mettre à jour
-
-    # Now sync only your guild commands
+    # Sync only your guild commands
     try:
         await bot.tree.sync(guild=guild)
         print(f"Commandes synchronisées pour la guilde ID: {GUILD_ID}")
@@ -669,8 +714,6 @@ async def stats(interaction: discord.Interaction):
     taux_victoire = (stats["parties_gagnees"] / total_parties * 100) if total_parties > 0 else 0
     
     # Le bénéfice net est l'argent gagné (mises retournées incluses) moins l'argent parié.
-    # Dans la fonction handle_fin_de_partie, kamas_gagnes est mise_retournée + gain_net.
-    # Le gain réel est : kamas_gagnes - kamas_joues.
     benefice_net = stats["kamas_gagnes"] - stats["kamas_joues"]
 
     embed = discord.Embed(
