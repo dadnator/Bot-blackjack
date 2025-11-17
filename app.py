@@ -1,4 +1,4 @@
-Import discord
+import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 from keep_alive import keep_alive
@@ -12,13 +12,14 @@ from typing import Dict, List, Optional
 # --- CONFIGURATION & CONSTANTES ---
 token = os.environ['TOKEN_BOT_DISCORD']
 
-GUILD_ID = 1295468215681679481  # ⬅️ Replace this with your real Discord server ID
-LOG_CHANNEL_ID = 1297672202657271818  # ⬅️ Remplacer par l'ID de votre salon de log
+GUILD_ID = 1366369136648654868
+CHANNEL_ID = 1394960912435122257# ⬅️ Replace this with your real Discord server ID
+LOG_CHANNEL_ID = 1366384335615164529  # ⬅️ Remplacer par l'ID de votre salon de log
 
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='/', intents=intents)
 @bot.event
 @bot.event
 async def on_ready():
@@ -454,7 +455,7 @@ reset_stats_hebdo.start()
 
 # ... (Commandes /duel, /start, /quitte, /stats, /duels_actifs restent inchangées)
 
-@bot.tree.command(name="duel", description="Créer un duel de blackjack avec une mise", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="duel", description="Créer un duel de blackjack avec une mise", guild=discord.Object(id=CHANNEL_ID))
 @app_commands.describe(mise="La mise en kamas que vous voulez jouer")
 async def duel(interaction: discord.Interaction, mise: int):
     if mise <= 0:
@@ -495,7 +496,7 @@ async def duel(interaction: discord.Interaction, mise: int):
         "message_id": interaction.id
     }
 
-@bot.tree.command(name="start", description="Lancer le duel (Créateur uniquement)", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="start", description="Lancer le duel (Créateur uniquement)", guild=discord.Object(id=CHANNEL_ID))
 async def start(interaction: discord.Interaction):
     duel_data = None
     duel_message_id = None
@@ -533,7 +534,7 @@ async def start(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, view=view)
 
-@bot.tree.command(name="quitte", description="Quitter un duel (pour les joueurs qui ont rejoint)", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="quitte", description="Quitter un duel (pour les joueurs qui ont rejoint)", guild=discord.Object(id=CHANNEL_ID))
 async def quitte(interaction: discord.Interaction):
     # Chercher si l'utilisateur est dans un duel en tant que joueur (pas créateur)
     duel_to_remove = None
@@ -575,7 +576,7 @@ async def quitte(interaction: discord.Interaction):
     except:
         await interaction.response.send_message(f"✅ Vous avez quitté le duel!", ephemeral=True)
 
-@bot.tree.command(name="stats", description="Voir vos statistiques de jeu avec kamas", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="stats", description="Voir vos statistiques de jeu avec kamas", guild=discord.Object(id=CHANNEL_ID))
 async def stats(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     stats = get_user_stats(user_id)
@@ -605,7 +606,7 @@ async def stats(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="duels_actifs", description="Voir les duels actifs disponibles", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="duels_actifs", description="Voir les duels actifs disponibles", guild=discord.Object(id=CHANNEL_ID))
 async def duels_actifs(interaction: discord.Interaction):
     if not active_duels:
         embed = discord.Embed(
@@ -632,5 +633,5 @@ async def duels_actifs(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-if __name__ == "__main__":
-    bot.run("YOUR_BOT_TOKEN")
+keep_alive()
+bot.run(token)
