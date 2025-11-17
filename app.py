@@ -315,11 +315,13 @@ def creer_embed_fin(game: BlackjackGame, gagnants: List[discord.Member], gain_pa
             inline=True
         )
     else:
+        # On ne précise pas si c'est un push ou une perte simple dans ce bloc
         embed.add_field(
-            name="❌ Croupier Gagne",
-            value=f"Le croupier remporte le pot total de **{gain_croupier:,} K**",
+            name="❌ Croupier Gagne / Égalité",
+            value=f"Le pot reste à la table ou les mises sont retournées. Croupier récupère **{gain_croupier:,} K** (Commission incluse)",
             inline=True
         )
+
 
     return embed
 
@@ -354,17 +356,14 @@ async def handle_fin_de_partie(interaction: discord.Interaction, game: Blackjack
             else:
                 stats["parties_perdues"] += 1
 
-    # --- Log du résultat ---
+    # --- Log du résultat (MODIFIÉ : Seulement si des joueurs ont gagné) ---
     log_channel = bot.get_channel(log_channel_id)
-    if log_channel:
+    if log_channel and gagnants:
+        
         joueurs_noms = ", ".join([p.display_name for p in game.players])
-        if gagnants:
-            gagnants_noms = ", ".join([g.display_name for g in gagnants])
-            resultat_log = f"🎉 **VICTOIRE** : **{gagnants_noms}** remportent chacun **{gain_par_joueur:,} K** (Net)."
-        elif any(game.scores[p.id] == game.croupier_score and game.scores[p.id] <= 21 for p in game.players):
-             resultat_log = "🤝 **ÉGALITÉ** : Quelques joueurs ont fait Push. Mises retournées."
-        else:
-            resultat_log = "❌ **PERDU** : Aucun joueur n'a gagné."
+        gagnants_noms = ", ".join([g.display_name for g in gagnants])
+        
+        resultat_log = f"🎉 **VICTOIRE** : **{gagnants_noms}** remportent chacun **{gain_par_joueur:,} K** (Net)."
         
         message_log = (
             f"--- **Résultat Duel Blackjack** ---\n"
@@ -389,8 +388,7 @@ async def handle_fin_de_partie(interaction: discord.Interaction, game: Blackjack
     sauvegarder_donnees()
 
 
-    # 🚀 LOGIQUE DE RELANCE AUTOMATIQUE (MISE À JOUR) 🚀
-    # La relance se fait si AUCUN joueur n'a gagné (inclut les cas 'Croupier Gagne' et 'Égalité Générale')
+    # 🚀 LOGIQUE DE RELANCE AUTOMATIQUE 🚀
     if not gagnants:
         
         mise_recommencee = list(game.mises.values())[0]
