@@ -739,7 +739,7 @@ async def on_ready():
 
 # --- COMMANDES SLASH ---
 
-@bot.tree.command(name="duel", description="Créer un duel de blackjack avec une mise", guild=discord.Object(id=CHANNEL_ID))
+@bot.tree.command(name="duel", description="Créer un duel de blackjack avec une mise", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(mise="La mise en kamas que vous voulez jouer")
 async def duel(interaction: discord.Interaction, mise: int):
     if mise <= 0:
@@ -787,7 +787,7 @@ async def duel(interaction: discord.Interaction, mise: int):
     active_duels[duel_key] = initial_duel_data
 
 
-@bot.tree.command(name="quit", description="Quitter ou annuler un duel actif.", guild=discord.Object(id=CHANNEL_ID))
+@bot.tree.command(name="quit", description="Quitter ou annuler un duel actif.", guild=discord.Object(id=GUILD_ID))
 async def quitte(interaction: discord.Interaction):
     duel_to_remove = None
     duel_key_to_remove = None
@@ -855,7 +855,7 @@ async def quitte(interaction: discord.Interaction):
         await interaction.followup.send(f"⚠️ Une erreur est survenue, mais vous avez bien quitté/annulé le duel.", ephemeral=True)
 
 
-@bot.tree.command(name="stats", description="Voir vos statistiques de jeu avec kamas", guild=discord.Object(id=CHANNEL_ID))
+@bot.tree.command(name="stats", description="Voir vos statistiques de jeu avec kamas", guild=discord.Object(id=GUILD_ID))
 async def stats(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     stats = get_user_stats(user_id)
@@ -887,7 +887,7 @@ async def stats(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="duels_actifs", description="Voir les duels actifs disponibles", guild=discord.Object(id=CHANNEL_ID))
+@bot.tree.command(name="duels_actifs", description="Voir les duels actifs disponibles", guild=discord.Object(id=GUILD_ID))
 async def duels_actifs(interaction: discord.Interaction):
     if not active_duels:
         embed = discord.Embed(
