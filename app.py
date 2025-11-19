@@ -19,8 +19,8 @@ GUILD_ID = 1366369136648654868
 CHANNEL_ID = 1394960912435122257
 LOG_CHANNEL_ID = 1366384335615164529 
 # ID DU RÔLE CROUPIER (Assurez-vous que cet ID est correct)
-ROLE_CROUPIER_ID = 1401471414262829066 
-ROLE_AUTRE_ID = 1366378672281620495 # Utilisé seulement pour le ping initial
+ROLE_CROUPIER_ID = 1297591998517088266 
+ROLE_AUTRE_ID = 1295473800640466944 # Utilisé seulement pour le ping initial
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -31,8 +31,9 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 DATA_FILE = "blackjack_data.json"
 
 # Stockage des données
-# CHANGEMENT: Clé = message_id pour une meilleure fiabilité
-active_duels = {}     # {message_id: {"creator": user, "mise": int, "players": [], "max_players": 4, "message_id": int}}
+# Clé = message_id pour une meilleure fiabilité
+# CHANGEMENT: Ajout de "croupier_assigne"
+active_duels = {}     # {message_id: {"creator": user, "mise": int, "players": [], "max_players": 4, "message_id": int, "croupier_assigne": Optional[discord.Member]}}
 active_games = {}     # {game_id: BlackjackGame object}
 player_stats = {}     # {user_id: {"kamas_joues": int, "kamas_gagnes": int, "parties_gagnees": int, "parties_perdues": int}}
 
@@ -184,7 +185,68 @@ class BlackjackGame:
 
         return gagnants
 
-# --- NOUVEAU BOUTON START POUR CROUPIER ---
+# --- FONCTIONS UTILITAIRES POUR L'EMBED DU DUEL ---
+
+def creer_embed_duel(duel_data: Dict):
+    embed = discord.Embed(
+        title="🎲 Duel de Blackjack Multi-Joueurs",
+        description=f"**{duel_data['creator'].display_name}** a lancé un duel de blackjack ! Le **Croupier** doit s'assigner pour lancer la partie.",
+        color=0x00ff00
+    )
+    
+    croupier_name = duel_data["croupier_assigne"].display_name if duel_data["croupier_assigne"] else "❌ Non assigné"
+
+    embed.add_field(name="👤 Créateur", value=f"{duel_data['creator'].display_name}", inline=True)
+    embed.add_field(name="💰 Mise", value=f"{duel_data['mise']:,} K", inline=True)
+    embed.add_field(name="👥 Joueurs", value=f"{len(duel_data['players']) + 1}/{duel_data['max_players']}", inline=True)
+    embed.add_field(name="🤵 Croupier Assigné", value=croupier_name, inline=False) # Nouveau champ
+    
+    joueurs_liste = [f"• {duel_data['creator'].display_name} 👑"] + [f"• {player.display_name}" for player in duel_data["players"]]
+    embed.add_field(
+        name=f"🎮 Participants ({len(joueurs_liste)}/{duel_data['max_players']})",
+        value="\n".join(joueurs_liste),
+        inline=False
+    )
+    embed.set_footer(text="Cliquez sur 'Rejoindre le duel' pour participer. Maximum 4 joueurs.")
+    
+    return embed
+
+
+# --- NOUVEAUX BOUTONS DE GESTION DU DUEL ---
+
+class CroupierAssignButton(discord.ui.Button):
+    def __init__(self, duel_message_id):
+        super().__init__(label="S'assigner (Croupier)", style=discord.ButtonStyle.secondary, emoji="🤝")
+        self.duel_message_id = duel_message_id
+
+    async def callback(self, interaction: discord.Interaction):
+        # 1. Vérification stricte du rôle Croupier
+        is_croupier = interaction.user.get_role(ROLE_CROUPIER_ID) is not None
+        
+        if not is_croupier:
+            await interaction.response.send_message("❌ Seul un utilisateur avec le rôle **Croupier** peut s'assigner.", ephemeral=True)
+            return
+
+        # 2. Chercher le duel via l'ID du message
+        duel_key = self.duel_message_id
+        duel_data = active_duels.get(duel_key)
+        
+        if not duel_data:
+            await interaction.response.send_message("❌ Ce duel n'existe plus.", ephemeral=True)
+            return
+            
+        # 3. Assignation
+        # On permet à un autre croupier de prendre la place
+        duel_data["croupier_assigne"] = interaction.user
+        
+        # 4. Mise à jour de l'interface
+        embed = creer_embed_duel(duel_data)
+        view = DuelView(self.duel_message_id)
+
+        await interaction.response.edit_message(embed=embed, view=view)
+        # Message éphémère pour confirmer l'action
+        await interaction.followup.send(f"✅ Vous êtes maintenant assigné(e) au duel !", ephemeral=True)
+
 class CroupierStartButton(discord.ui.Button):
     def __init__(self, duel_message_id):
         # Étiquette plus explicite pour le Croupier
@@ -206,9 +268,13 @@ class CroupierStartButton(discord.ui.Button):
         if not duel_data:
             await interaction.response.send_message("❌ Ce duel n'existe plus ou est déjà lancé.", ephemeral=True)
             return
+            
+        # 2.1. Vérification que le croupier est assigné (BONUS: permet à n'importe quel croupier de lancer)
+        if duel_data["croupier_assigne"] is None:
+            await interaction.response.send_message("⚠️ Le Croupier doit d'abord s'assigner au duel avec le bouton 🤝 pour confirmer la prise en charge.", ephemeral=True)
+            return
 
         # 3. Vérification du nombre de joueurs
-        # On ne compte que les joueurs qui paient une mise. Le croupier ne joint pas ici.
         total_players = len(duel_data["players"]) + 1 # Créateur + joueurs
         if total_players < 2:
             await interaction.response.send_message("❌ Pas assez de joueurs! Attendez qu'au moins 1 joueur rejoigne (min 2 joueurs).", ephemeral=True)
@@ -277,19 +343,7 @@ class DuelButton(discord.ui.Button):
         # Pas besoin de réassigner, l'objet est modifié en place
         
 
-        embed = interaction.message.embeds[0]
-        embed.clear_fields()
-
-        embed.add_field(name="👤 Créateur", value=f"{duel_data['creator'].display_name}", inline=True)
-        embed.add_field(name="💰 Mise", value=f"{duel_data['mise']:,} K", inline=True)
-        embed.add_field(name="👥 Joueurs", value=f"{len(duel_data["players"]) + 1}/{duel_data['max_players']}", inline=True)
-
-        joueurs_liste = [f"• {duel_data['creator'].display_name} 👑"] + [f"• {player.display_name}" for player in duel_data["players"]]
-        embed.add_field(
-            name=f"🎮 Participants ({len(joueurs_liste)}/{duel_data['max_players']})",
-            value="\n".join(joueurs_liste),
-            inline=False
-        )
+        embed = creer_embed_duel(duel_data)
         
         view_to_send = DuelView(self.duel_message_id) # La vue inclut les deux boutons
 
@@ -301,7 +355,9 @@ class DuelView(discord.ui.View):
         super().__init__(timeout=None)
         # 1. Bouton pour rejoindre (Joueurs)
         self.add_item(DuelButton(duel_message_id))
-        # 2. Bouton pour lancer (Croupier)
+        # 2. Bouton pour s'assigner (Croupier)
+        self.add_item(CroupierAssignButton(duel_message_id))
+        # 3. Bouton pour lancer (Croupier)
         self.add_item(CroupierStartButton(duel_message_id))
 
 # --- Fonctions pour l'interface de Jeu ---
@@ -645,18 +701,18 @@ async def duel(interaction: discord.Interaction, mise: int):
 
     # ID des rôles à ping
     roles_ping = f"<@&{ROLE_CROUPIER_ID}> <@&{ROLE_AUTRE_ID}>"
-
-    embed = discord.Embed(
-        title="🎲 Duel de Blackjack Multi-Joueurs",
-        description=f"**{interaction.user.display_name}** a lancé un duel de blackjack ! Le **Croupier** doit lancer la partie avec le bouton **Croupier : Lancer la partie 🚀**.",
-        color=0x00ff00
-    )
-
-    embed.add_field(name="👤 Créateur", value=f"{interaction.user.display_name}", inline=True)
-    embed.add_field(name="💰 Mise", value=f"{mise:,} K", inline=True)
-    embed.add_field(name="👥 Joueurs", value="1/4", inline=True)
-    embed.add_field(name="🎮 Participants (1/4)", value=f"• {interaction.user.display_name} 👑", inline=False)
-    embed.set_footer(text="Cliquez sur 'Rejoindre le duel' pour participer. Maximum 4 joueurs.")
+    
+    # Préparer les données initiales du duel
+    initial_duel_data = {
+        "creator": interaction.user,
+        "mise": mise,
+        "players": [],
+        "max_players": 4,
+        "message_id": None, # Sera mis à jour après l'envoi
+        "croupier_assigne": None # Nouveau champ
+    }
+    
+    embed = creer_embed_duel(initial_duel_data)
 
     # Envoi avec ping autorisé pour les rôles
     allowed_mentions = discord.AllowedMentions(roles=True)
@@ -666,24 +722,21 @@ async def duel(interaction: discord.Interaction, mise: int):
     message = await interaction.followup.send(
         content=roles_ping,
         embed=embed,
-        view=DuelView(interaction.id), # On utilise l'ID de l'interaction pour initialiser la vue
+        view=DuelView(interaction.id), # Utilise l'ID de l'interaction pour l'initialisation temporaire de la vue
         allowed_mentions=allowed_mentions
     )
     
     # CLÉ DU DUEL = ID DU MESSAGE (plus stable)
     duel_key = message.id
     
+    # Mettre à jour l'objet avec l'ID du message réel
+    initial_duel_data["message_id"] = duel_key
+    
     # Mettre à jour la vue avec l'ID du message réel
     await message.edit(view=DuelView(duel_key)) 
     
     # Enregistre le duel avec le message.id comme clé
-    active_duels[duel_key] = {
-        "creator": interaction.user,
-        "mise": mise,
-        "players": [],
-        "max_players": 4,
-        "message_id": message.id
-    }
+    active_duels[duel_key] = initial_duel_data
 
 
 @bot.tree.command(name="quitte", description="Quitter un duel (pour les joueurs qui ont rejoint)", guild=discord.Object(id=GUILD_ID))
@@ -713,27 +766,16 @@ async def quitte(interaction: discord.Interaction):
         channel = interaction.channel
         # Utiliser l'ID du message enregistré
         message = await channel.fetch_message(duel_to_remove["message_id"]) 
-        embed = message.embeds[0]
-        embed.clear_fields()
-
-        embed.add_field(name="👤 Créateur", value=f"{duel_to_remove['creator'].display_name}", inline=True)
-        embed.add_field(name="💰 Mise", value=f"{duel_to_remove['mise']:,} K", inline=True)
-        embed.add_field(name="👥 Joueurs", value=f"{len(duel_to_remove['players']) + 1}/{duel_to_remove['max_players']}", inline=True)
-
-        joueurs_liste = [f"• {duel_to_remove['creator'].display_name} 👑"] + [f"• {player.display_name}" for player in duel_to_remove["players"]]
-        embed.add_field(
-            name=f"🎮 Participants ({len(joueurs_liste)}/{duel_to_remove['max_players']})",
-            value="\n".join(joueurs_liste),
-            inline=False
-        )
         
-        # La vue est recréée avec le message ID (clé stable)
+        # Recréer l'embed et la vue
+        embed = creer_embed_duel(duel_to_remove)
         view_to_send = DuelView(duel_key_to_remove) 
 
         await message.edit(embed=embed, view=view_to_send)
         await interaction.response.send_message(f"✅ Vous avez quitté le duel de {duel_to_remove['creator'].display_name}!", ephemeral=True)
-    except:
+    except Exception as e:
         # En cas d'erreur de récupération du message (ex: message supprimé)
+        print(f"Erreur lors de la mise à jour du message de duel: {e}")
         await interaction.response.send_message(f"✅ Vous avez quitté un duel actif (le message a pu être supprimé).", ephemeral=True)
         if duel_key_to_remove in active_duels:
              del active_duels[duel_key_to_remove] # On nettoie la liste
@@ -789,6 +831,7 @@ async def duels_actifs(interaction: discord.Interaction):
 
     for i, (message_id, data) in enumerate(active_duels.items(), 1):
         places_restantes = data["max_players"] - (len(data["players"]) + 1)
+        croupier_name = data["croupier_assigne"].display_name if data["croupier_assigne"] else "Non assigné" # Ajout du croupier assigné
         
         # Tentative d'obtenir le lien vers le message
         try:
@@ -801,6 +844,7 @@ async def duels_actifs(interaction: discord.Interaction):
             name=f"Duel #{i} - {data['creator'].display_name}",
             value=(
                 f"💰 Mise: **{data['mise']:,} K**\n"
+                f"🤵 Croupier: **{croupier_name}**\n"
                 f"👥 Places: **{places_restantes}** restantes\n"
                 f"{message_link}"
             ),
