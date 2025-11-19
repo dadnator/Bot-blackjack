@@ -11,7 +11,6 @@ from typing import Dict, List, Optional
 
 # --- CONFIGURATION & CONSTANTES ---
 # Assurez-vous que 'TOKEN_BOT_DISCORD' est défini dans vos variables d'environnement
-# NOTE: Le token doit être défini dans l'environnement du serveur de déploiement (comme Render ou Replit)
 token = os.environ['TOKEN_BOT_DISCORD']
 
 # Remplacer les IDs par vos IDs réels
@@ -187,7 +186,8 @@ class BlackjackGame:
 
 # --- FONCTIONS UTILITAIRES POUR L'EMBED DU DUEL ---
 
-def creer_embed_duel(duel_data: Dict):
+# ATTENTION: Cette fonction est maintenant ASYNCHRONE
+async def creer_embed_duel(duel_data: Dict):
     embed = discord.Embed(
         title="🎲 Duel de Blackjack Multi-Joueurs",
         description=f"**{duel_data['creator'].display_name}** a lancé un duel de blackjack ! Le **Croupier** doit s'assigner pour lancer la partie.",
@@ -198,20 +198,21 @@ def creer_embed_duel(duel_data: Dict):
 
     embed.add_field(name="👤 Créateur", value=f"{duel_data['creator'].display_name}", inline=True)
     embed.add_field(name="💰 Mise", value=f"{duel_data['mise']:,} K", inline=True)
-    # Important: duel_data['players'] contient des ID ici
     embed.add_field(name="👥 Joueurs", value=f"{len(duel_data['players']) + 1}/{duel_data['max_players']}", inline=True)
-    embed.add_field(name="🤵 Croupier Assigné", value=croupier_name, inline=False) # Nouveau champ
+    embed.add_field(name="🤵 Croupier Assigné", value=croupier_name, inline=False) 
     
-    # Conversion des ID en noms pour l'affichage
+    # Correction: Conversion des ID en noms pour l'affichage via fetch_user (API Discord)
     joueurs_membres = []
-    # On itère sur les ID des joueurs
     for player_id in duel_data["players"]:
-        # Tente de récupérer l'objet utilisateur (non garanti si l'utilisateur quitte le serveur)
-        member = bot.get_user(player_id) 
-        if member:
-            joueurs_membres.append(member.display_name)
-        else:
-            joueurs_membres.append(f"Utilisateur Inconnu ({player_id})") # Fallback
+        try:
+            # Utilisation de fetch_user pour garantir la récupération de l'objet utilisateur
+            member = await bot.fetch_user(player_id) 
+            if member:
+                joueurs_membres.append(member.display_name)
+            else:
+                joueurs_membres.append(f"Utilisateur Inconnu ({player_id})") 
+        except:
+            joueurs_membres.append(f"Utilisateur Inconnu ({player_id})")
             
     joueurs_liste = [f"• {duel_data['creator'].display_name} 👑"] + [f"• {name}" for name in joueurs_membres]
     
@@ -266,7 +267,7 @@ class CroupierAssignButton(discord.ui.Button):
         duel_data["croupier_assigne"] = interaction.user
         
         # 5. Mise à jour de l'interface
-        embed = creer_embed_duel(duel_data)
+        embed = await creer_embed_duel(duel_data) # APPEL MIS À JOUR
         view = DuelView(self.duel_message_id)
 
         await interaction.response.edit_message(embed=embed, view=view)
@@ -390,7 +391,7 @@ class DuelButton(discord.ui.Button):
         # Stocke l'ID de l'utilisateur
         duel_data["players"].append(interaction.user.id)
         
-        embed = creer_embed_duel(duel_data)
+        embed = await creer_embed_duel(duel_data) # APPEL MIS À JOUR
         
         view_to_send = DuelView(self.duel_message_id) # La vue inclut les deux boutons
 
@@ -754,7 +755,8 @@ async def duel(interaction: discord.Interaction, mise: int):
         "croupier_assigne": None 
     }
     
-    embed = creer_embed_duel(initial_duel_data)
+    # APPEL MIS À JOUR : Fonction maintenant asynchrone
+    embed = await creer_embed_duel(initial_duel_data)
 
     # Envoi avec ping autorisé pour les rôles
     allowed_mentions = discord.AllowedMentions(roles=True)
@@ -831,7 +833,7 @@ async def quitte(interaction: discord.Interaction):
             await message.edit(content=public_update, embed=None, view=None)
         else:
             # Si un joueur quitte, on met à jour l'embed
-            embed = creer_embed_duel(duel_to_remove)
+            embed = await creer_embed_duel(duel_to_remove) # APPEL MIS À JOUR
             view_to_send = DuelView(duel_key_to_remove)
             await message.edit(embed=embed, view=view_to_send)
             
@@ -898,13 +900,16 @@ async def duels_actifs(interaction: discord.Interaction):
         color=0x00ff00
     )
 
+    # Note: L'embed ici n'affiche que les noms si l'utilisateur est dans le cache.
+    # Pour afficher les noms de manière garantie ici aussi, on devrait transformer
+    # /duels_actifs en asynchrone et utiliser la logique fetch_user pour tous.
+    # Pour ne pas surcharger l'API, on garde l'affichage simple pour cette commande.
+    
     for i, (message_id, data) in enumerate(active_duels.items(), 1):
         places_restantes = data["max_players"] - (len(data["players"]) + 1)
-        croupier_name = data["croupier_assigne"].display_name if data["croupier_assigne"] else "Non assigné" # Ajout du croupier assigné
+        croupier_name = data["croupier_assigne"].display_name if data["croupier_assigne"] else "Non assigné"
         
-        # Tentative d'obtenir le lien vers le message
         try:
-            # message_id est maintenant la clé (message.id)
             message_link = f"[Aller au duel]({interaction.channel.get_partial_message(message_id).jump_url})"
         except:
             message_link = "Lien non disponible"
