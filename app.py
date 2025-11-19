@@ -18,6 +18,9 @@ token = os.environ['TOKEN_BOT_DISCORD']
 GUILD_ID = 1366369136648654868
 CHANNEL_ID = 1394960912435122257
 LOG_CHANNEL_ID = 1366384335615164529 
+# ID DU RÔLE CROUPIER (Assurez-vous que cet ID est correct)
+ROLE_CROUPIER_ID = 1297591998517088266 
+ROLE_AUTRE_ID = 1295473800640466944 # Utilisé seulement pour le ping initial
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -28,7 +31,7 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 DATA_FILE = "blackjack_data.json"
 
 # Stockage des données
-active_duels = {}     # {message_id: {"creator": user, "mise": int, "players": [], "max_players": 4}}
+active_duels = {}     # {message_id: {"creator": user, "mise": int, "players": [], "max_players": 4, "message_id": int}}
 active_games = {}     # {game_id: BlackjackGame object}
 player_stats = {}     # {user_id: {"kamas_joues": int, "kamas_gagnes": int, "parties_gagnees": int, "parties_perdues": int}}
 
@@ -180,17 +183,96 @@ class BlackjackGame:
 
         return gagnants
 
+# --- NOUVEAU BOUTON START POUR CROUPIER ---
+class CroupierStartButton(discord.ui.Button):
+    def __init__(self, duel_message_id):
+        # Étiquette plus explicite pour le Croupier
+        super().__init__(label="Croupier : Lancer la partie", style=discord.ButtonStyle.danger, emoji="🚀")
+        self.duel_message_id = duel_message_id
+
+    async def callback(self, interaction: discord.Interaction):
+        # 1. Vérification stricte du rôle Croupier
+        is_croupier = interaction.user.get_role(ROLE_CROUPIER_ID) is not None
+        
+        if not is_croupier:
+            await interaction.response.send_message("❌ Seul le **Croupier** peut lancer un duel.", ephemeral=True)
+            return
+
+        # 2. Chercher le duel via l'ID du message
+        duel_data = None
+        duel_key = None
+        for key, data in active_duels.items():
+            if data["message_id"] == self.duel_message_id:
+                duel_data = data
+                duel_key = key
+                break
+        
+        if not duel_data:
+            await interaction.response.send_message("❌ Ce duel n'existe plus ou est déjà lancé.", ephemeral=True)
+            return
+
+        # 3. Vérification du nombre de joueurs
+        # On ne compte que les joueurs qui paient une mise. Le croupier ne joint pas ici.
+        total_players = len(duel_data["players"]) + 1 # Créateur + joueurs
+        if total_players < 2:
+            await interaction.response.send_message("❌ Pas assez de joueurs! Attendez qu'au moins 1 joueur rejoigne (min 2 joueurs).", ephemeral=True)
+            return
+
+        all_players = [duel_data["creator"]] + duel_data["players"]
+
+        # 4. Créer la partie de blackjack
+        game = BlackjackGame(all_players, duel_data["mise"])
+        game.distribuer_cartes_initiales()
+        active_games[game.game_id] = game
+        
+        # Avancer le tour pour gérer le Blackjack Naturel initial
+        joueur_actuel_apres_distrib = game.joueur_actuel()
+        if joueur_actuel_apres_distrib and game.stands[joueur_actuel_apres_distrib.id]:
+            game.joueur_suivant()
+            
+        joueur_actuel = game.joueur_actuel()
+
+        # Supprimer le duel de la liste active
+        if duel_key in active_duels:
+            del active_duels[duel_key]
+
+        # 5. Lancer l'interface de jeu
+
+        if joueur_actuel is None:
+            # Cas où TOUS les joueurs ont eu un Blackjack Naturel
+            await interaction.response.defer() 
+            game.jouer_croupier()
+            # Mettre à jour le message de duel en "Partie Lancée" (ou le supprimer)
+            await interaction.message.edit(content="Partie lancée ! Le résultat suit...", embed=None, view=None)
+            await handle_fin_de_partie(interaction, game, LOG_CHANNEL_ID)
+            return
+
+        # Créer l'interface de jeu pour le joueur qui doit commencer
+        embed = creer_embed_game(game, joueur_actuel)
+        view = GameView(game.game_id)
+        
+        # 6. Éditer le message de duel avec la nouvelle interface de jeu
+        await interaction.response.edit_message(content=f"Partie lancée par {interaction.user.display_name} (Croupier)!", embed=embed, view=view)
+
+
 class DuelButton(discord.ui.Button):
     def __init__(self, duel_message_id):
         super().__init__(label="Rejoindre le duel", style=discord.ButtonStyle.primary, emoji="🎮")
         self.duel_message_id = duel_message_id
 
     async def callback(self, interaction: discord.Interaction):
-        if self.duel_message_id not in active_duels:
+        # Chercher le duel via l'ID du message
+        duel_data = None
+        duel_key = None
+        for key, data in active_duels.items():
+            if data["message_id"] == self.duel_message_id:
+                duel_data = data
+                duel_key = key
+                break
+                
+        if not duel_data:
             await interaction.response.send_message("❌ Ce duel n'existe plus!", ephemeral=True)
             return
-
-        duel_data = active_duels[self.duel_message_id]
 
         if interaction.user in duel_data["players"] or interaction.user == duel_data["creator"]:
             await interaction.response.send_message("❌ Vous participez déjà à ce duel!", ephemeral=True)
@@ -201,6 +283,8 @@ class DuelButton(discord.ui.Button):
             return
 
         duel_data["players"].append(interaction.user)
+        active_duels[duel_key] = duel_data 
+        
 
         embed = interaction.message.embeds[0]
         embed.clear_fields()
@@ -215,16 +299,21 @@ class DuelButton(discord.ui.Button):
             value="\n".join(joueurs_liste),
             inline=False
         )
+        
+        view_to_send = DuelView(self.duel_message_id) # La vue inclut les deux boutons
 
-        await interaction.message.edit(embed=embed)
+        await interaction.message.edit(embed=embed, view=view_to_send)
         await interaction.response.send_message(f"✅ Vous avez rejoint le duel de {duel_data['creator'].display_name}!", ephemeral=True)
 
 class DuelView(discord.ui.View):
     def __init__(self, duel_message_id):
         super().__init__(timeout=None)
+        # 1. Bouton pour rejoindre (Joueurs)
         self.add_item(DuelButton(duel_message_id))
+        # 2. Bouton pour lancer (Croupier)
+        self.add_item(CroupierStartButton(duel_message_id))
 
-# --- Fonctions pour l'interface de Jeu (centralisées pour réutilisation) ---
+# --- Fonctions pour l'interface de Jeu ---
 
 def creer_embed_game(game: BlackjackGame, joueur_suivant: Optional[discord.Member]):
     embed = discord.Embed(title="🎲 TABLE DE BLACKJACK", color=0xffff00)
@@ -322,7 +411,6 @@ def creer_embed_fin(game: BlackjackGame, gagnants: List[discord.Member], gain_pa
             inline=True
         )
 
-
     return embed
 
 async def handle_fin_de_partie(interaction: discord.Interaction, game: BlackjackGame, log_channel_id: int):
@@ -356,7 +444,7 @@ async def handle_fin_de_partie(interaction: discord.Interaction, game: Blackjack
             else:
                 stats["parties_perdues"] += 1
 
-    # --- Log du résultat (MODIFIÉ : Seulement si des joueurs ont gagné) ---
+    # --- Log du résultat (Seulement si des joueurs ont gagné) ---
     log_channel = bot.get_channel(log_channel_id)
     if log_channel and gagnants:
         
@@ -565,14 +653,11 @@ async def duel(interaction: discord.Interaction, mise: int):
         return
 
     # ID des rôles à ping
-    # Remplacer par vos IDs de rôles si besoin
-    ROLE_CROUPIER_ID = 1297591998517088266 
-    ROLE_AUTRE_ID = 1295473800640466944
     roles_ping = f"<@&{ROLE_CROUPIER_ID}> <@&{ROLE_AUTRE_ID}>"
 
     embed = discord.Embed(
         title="🎲 Duel de Blackjack Multi-Joueurs",
-        description=f"**{interaction.user.display_name}** a lancé un duel de blackjack !",
+        description=f"**{interaction.user.display_name}** a lancé un duel de blackjack ! Le **Croupier** doit lancer la partie avec le bouton **Croupier : Lancer la partie 🚀**.",
         color=0x00ff00
     )
 
@@ -590,89 +675,32 @@ async def duel(interaction: discord.Interaction, mise: int):
     message = await interaction.followup.send(
         content=roles_ping,
         embed=embed,
-        view=DuelView(interaction.id), # Utiliser l'ID de l'interaction comme clé initiale
+        view=DuelView(interaction.id), 
         allowed_mentions=allowed_mentions
     )
-
-    active_duels[interaction.id] = {
+    
+    # Enregistre l'ID du message pour que les boutons puissent s'y référer
+    duel_id = interaction.id 
+    
+    # Mettre à jour la clé du duel avec le message.id
+    active_duels[duel_id] = {
         "creator": interaction.user,
         "mise": mise,
         "players": [],
         "max_players": 4,
-        "message_id": message.id
+        "message_id": message.id # On utilise l'ID du message pour la référence
     }
 
-@bot.tree.command(name="start", description="Lancer le duel (Créateur uniquement)", guild=discord.Object(id=GUILD_ID))
-async def start(interaction: discord.Interaction):
-    duel_data = None
-    duel_message_id = None
-
-    # Chercher le duel où l'utilisateur est le créateur
-    for message_id, data in active_duels.items():
-        if data["creator"] == interaction.user:
-            duel_data = data
-            duel_message_id = message_id
-            break
-
-    if not duel_data:
-        await interaction.response.send_message("❌ Vous n'avez pas de duel en attente!", ephemeral=True)
-        return
-
-    total_players = len(duel_data["players"]) + 1
-    if total_players < 2:
-        await interaction.response.send_message("❌ Pas assez de joueurs! Attendez qu'au moins 1 joueur rejoigne (min 2 joueurs).", ephemeral=True)
-        return
-
-    all_players = [duel_data["creator"]] + duel_data["players"]
-
-    # Créer la partie de blackjack
-    game = BlackjackGame(all_players, duel_data["mise"])
-    game.distribuer_cartes_initiales()
-    active_games[game.game_id] = game
-    
-    # CORRECTION BLACKJACK NATUREL: Avancer le tour jusqu'au premier joueur qui n'est pas en stand
-    joueur_actuel_apres_distrib = game.joueur_actuel()
-    if joueur_actuel_apres_distrib and game.stands[joueur_actuel_apres_distrib.id]:
-        # Le premier joueur a Blackjack Naturel ou a busté (bien que bust soit impossible ici), on passe au suivant
-        game.joueur_suivant()
-        
-    # Vérifier l'état final du premier joueur (qui n'est pas en stand)
-    joueur_actuel = game.joueur_actuel()
-
-    # Supprimer le duel de la liste active
-    if duel_message_id in active_duels:
-        del active_duels[duel_message_id]
-        
-    # Suppression du message de duel précédent (optionnel)
-    try:
-        channel = interaction.channel
-        message = await channel.fetch_message(duel_data["message_id"])
-        await message.delete()
-    except discord.NotFound:
-        pass # Le message a déjà été supprimé ou n'existe plus
-
-    if joueur_actuel is None:
-        # Cas où TOUS les joueurs ont eu un Blackjack Naturel (la partie est finie)
-        await interaction.response.defer()
-        game.jouer_croupier()
-        await handle_fin_de_partie(interaction, game, LOG_CHANNEL_ID)
-        return
-
-    # Créer l'interface de jeu pour le joueur qui doit commencer
-    embed = creer_embed_game(game, joueur_actuel)
-    view = GameView(game.game_id)
-
-    await interaction.response.send_message(embed=embed, view=view)
 
 @bot.tree.command(name="quitte", description="Quitter un duel (pour les joueurs qui ont rejoint)", guild=discord.Object(id=GUILD_ID))
 async def quitte(interaction: discord.Interaction):
     duel_to_remove = None
-    duel_message_id = None
+    duel_key = None
 
-    for message_id, data in active_duels.items():
+    for key, data in active_duels.items():
         if interaction.user in data["players"]:
             duel_to_remove = data
-            duel_message_id = message_id
+            duel_key = key
             break
 
     if not duel_to_remove:
@@ -700,8 +728,10 @@ async def quitte(interaction: discord.Interaction):
             value="\n".join(joueurs_liste),
             inline=False
         )
+        
+        view_to_send = DuelView(message.id)
 
-        await message.edit(embed=embed)
+        await message.edit(embed=embed, view=view_to_send)
         await interaction.response.send_message(f"✅ Vous avez quitté le duel de {duel_to_remove['creator'].display_name}!", ephemeral=True)
     except:
         await interaction.response.send_message(f"✅ Vous avez quitté le duel!", ephemeral=True)
