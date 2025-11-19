@@ -14,12 +14,12 @@ from typing import Dict, List, Optional
 token = os.environ['TOKEN_BOT_DISCORD']
 
 # Remplacer les IDs par vos IDs réels
-GUILD_ID = 1366369136648654868
-CHANNEL_ID = 1394960912435122257
-LOG_CHANNEL_ID = 1366384335615164529 
+GUILD_ID = 1403853462181122172
+CHANNEL_ID = 1440678625736392714
+LOG_CHANNEL_ID = 1440694925342670919
 # ID DU RÔLE CROUPIER (Assurez-vous que cet ID est correct)
-ROLE_CROUPIER_ID = 1401471414262829066 
-ROLE_AUTRE_ID = 1366378672281620495 # Utilisé seulement pour le ping initial
+ROLE_CROUPIER_ID = 1406210029815861258 
+ROLE_AUTRE_ID = 1406210131515019355 # Utilisé seulement pour le ping initial
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -787,7 +787,7 @@ async def duel(interaction: discord.Interaction, mise: int):
     active_duels[duel_key] = initial_duel_data
 
 
-@bot.tree.command(name="quitte", description="Quitter ou annuler un duel actif.", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="quit", description="Quitter ou annuler un duel actif.", guild=discord.Object(id=GUILD_ID))
 async def quitte(interaction: discord.Interaction):
     duel_to_remove = None
     duel_key_to_remove = None
