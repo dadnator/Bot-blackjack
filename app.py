@@ -514,6 +514,39 @@ def creer_embed_fin(game: BlackjackGame, gagnants: List[discord.Member], gain_pa
 
 async def handle_fin_de_partie(interaction: discord.Interaction, game: BlackjackGame, log_channel_id: int):
     gagnants = game.determiner_gagnants()
+
+    # --- NOUVELLE RÈGLE : RELANCER AUTOMATIQUEMENT SI PLUSIEURS GAGNANTS ---
+    if len(gagnants) > 1:
+        noms = ", ".join([g.display_name for g in gagnants])
+        await interaction.channel.send(
+            f"⚠️ Plusieurs joueurs sont ex æquo (**{noms}**). "
+            f"Relance automatique pour déterminer **un seul gagnant** !"
+        )
+
+        # Relance avec mêmes joueurs & mêmes mises
+        mise_recommencee = list(game.mises.values())[0]
+        joueurs_recommencees = game.players
+
+        new_game = BlackjackGame(joueurs_recommencees, mise_recommencee)
+        new_game.distribuer_cartes_initiales()
+        active_games[new_game.game_id] = new_game
+
+        # Avance si BJ naturel
+        new_joueur_actuel = new_game.joueur_actuel()
+        if new_joueur_actuel and new_game.stands[new_joueur_actuel.id]:
+            new_game.joueur_suivant()
+        new_joueur_actuel = new_game.joueur_actuel()
+
+        embed_nouvelle_partie = creer_embed_game(new_game, new_joueur_actuel)
+        view_nouvelle_partie = GameView(new_game.game_id)
+
+        await interaction.channel.send(
+            content="🔄 Nouvelle partie lancée automatiquement !",
+            embed=embed_nouvelle_partie,
+            view=view_nouvelle_partie
+        )
+
+        return  # On arrête ici
     
     # 5% de commission
     commission = int(game.pot_total * 0.05)
