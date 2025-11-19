@@ -65,6 +65,10 @@ class BlackjackGame:
     def __init__(self, players, mise_par_joueur):
         # La liste 'players' doit contenir des objets discord.Member/User pour l'accès aux infos
         self.players = players  
+        
+        # AJOUT POUR TIRAGE ALÉATOIRE: Mélanger la liste des joueurs
+        random.shuffle(self.players) 
+        
         self.mises = {player.id: mise_par_joueur for player in players}
         self.hands = {player.id: [] for player in players}
         self.scores = {player.id: 0 for player in players}
@@ -186,7 +190,6 @@ class BlackjackGame:
 
 # --- FONCTIONS UTILITAIRES POUR L'EMBED DU DUEL ---
 
-# ATTENTION: Cette fonction est maintenant ASYNCHRONE
 async def creer_embed_duel(duel_data: Dict):
     embed = discord.Embed(
         title="🎲 Duel de Blackjack Multi-Joueurs",
@@ -267,7 +270,7 @@ class CroupierAssignButton(discord.ui.Button):
         duel_data["croupier_assigne"] = interaction.user
         
         # 5. Mise à jour de l'interface
-        embed = await creer_embed_duel(duel_data) # APPEL MIS À JOUR
+        embed = await creer_embed_duel(duel_data)
         view = DuelView(self.duel_message_id)
 
         await interaction.response.edit_message(embed=embed, view=view)
@@ -328,6 +331,7 @@ class CroupierStartButton(discord.ui.Button):
             return
 
         # 4. Créer la partie de blackjack (avec les objets User/Member)
+        # Note: Le mélange des joueurs (ordre aléatoire) est géré dans __init__ de BlackjackGame.
         game = BlackjackGame(all_players, duel_data["mise"])
         game.distribuer_cartes_initiales()
         active_games[game.game_id] = game
@@ -900,11 +904,6 @@ async def duels_actifs(interaction: discord.Interaction):
         color=0x00ff00
     )
 
-    # Note: L'embed ici n'affiche que les noms si l'utilisateur est dans le cache.
-    # Pour afficher les noms de manière garantie ici aussi, on devrait transformer
-    # /duels_actifs en asynchrone et utiliser la logique fetch_user pour tous.
-    # Pour ne pas surcharger l'API, on garde l'affichage simple pour cette commande.
-    
     for i, (message_id, data) in enumerate(active_duels.items(), 1):
         places_restantes = data["max_players"] - (len(data["players"]) + 1)
         croupier_name = data["croupier_assigne"].display_name if data["croupier_assigne"] else "Non assigné"
