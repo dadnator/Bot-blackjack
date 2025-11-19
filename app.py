@@ -235,11 +235,24 @@ class CroupierAssignButton(discord.ui.Button):
             await interaction.response.send_message("❌ Ce duel n'existe plus.", ephemeral=True)
             return
             
-        # 3. Assignation
-        # On permet à un autre croupier de prendre la place
+        # 3. VÉRIFICATION D'ASSIGNATION : Le croupier est-il déjà assigné ?
+        if duel_data["croupier_assigne"] is not None:
+            # Si c'est l'utilisateur assigné qui clique (pour se rassurer ou rafraîchir)
+            if duel_data["croupier_assigne"].id == interaction.user.id:
+                 await interaction.response.send_message("ℹ️ Vous êtes déjà assigné(e) à ce duel.", ephemeral=True)
+                 return
+                 
+            # Si c'est un AUTRE croupier, on bloque le remplacement (NOUVEAU COMPORTEMENT)
+            await interaction.response.send_message(
+                f"❌ Le duel a déjà un Croupier assigné : **{duel_data['croupier_assigne'].display_name}**. Un remplacement n'est pas autorisé.", 
+                ephemeral=True
+            )
+            return
+            
+        # 4. Assignation (Si et seulement si 'croupier_assigne' est None)
         duel_data["croupier_assigne"] = interaction.user
         
-        # 4. Mise à jour de l'interface
+        # 5. Mise à jour de l'interface
         embed = creer_embed_duel(duel_data)
         view = DuelView(self.duel_message_id)
 
@@ -269,10 +282,16 @@ class CroupierStartButton(discord.ui.Button):
             await interaction.response.send_message("❌ Ce duel n'existe plus ou est déjà lancé.", ephemeral=True)
             return
             
-        # 2.1. Vérification que le croupier est assigné (BONUS: permet à n'importe quel croupier de lancer)
+        # 2.1. Vérification que le croupier est bien celui qui est assigné (même si tout croupier peut lancer, c'est mieux que ce soit celui assigné)
         if duel_data["croupier_assigne"] is None:
             await interaction.response.send_message("⚠️ Le Croupier doit d'abord s'assigner au duel avec le bouton 🤝 pour confirmer la prise en charge.", ephemeral=True)
             return
+            
+        # 2.2. Vérification que le Croupier qui lance est bien celui assigné (facultatif mais recommandé)
+        if duel_data["croupier_assigne"].id != interaction.user.id:
+             await interaction.response.send_message("❌ Seul le Croupier assigné (**" + duel_data["croupier_assigne"].display_name + "**) peut lancer cette partie.", ephemeral=True)
+             return
+
 
         # 3. Vérification du nombre de joueurs
         total_players = len(duel_data["players"]) + 1 # Créateur + joueurs
