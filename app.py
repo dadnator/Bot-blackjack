@@ -31,9 +31,8 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 DATA_FILE = "blackjack_data.json"
 
 # Stockage des données
-# Clé = message_id pour une meilleure fiabilité
-# CHANGEMENT: Ajout de "croupier_assigne"
-active_duels = {}     # {message_id: {"creator": user, "mise": int, "players": [], "max_players": 4, "message_id": int, "croupier_assigne": Optional[discord.Member]}}
+# 'players' contient des ID (int)
+active_duels = {}     # {message_id: {"creator": user, "mise": int, "players": [int], "max_players": 4, "message_id": int, "croupier_assigne": Optional[discord.Member]}}
 active_games = {}     # {game_id: BlackjackGame object}
 player_stats = {}     # {user_id: {"kamas_joues": int, "kamas_gagnes": int, "parties_gagnees": int, "parties_perdues": int}}
 
@@ -65,7 +64,8 @@ def get_user_stats(user_id):
 
 class BlackjackGame:
     def __init__(self, players, mise_par_joueur):
-        self.players = players  # Liste des joueurs (discord.Member)
+        # La liste 'players' doit contenir des objets discord.Member/User pour l'accès aux infos
+        self.players = players  
         self.mises = {player.id: mise_par_joueur for player in players}
         self.hands = {player.id: [] for player in players}
         self.scores = {player.id: 0 for player in players}
@@ -198,10 +198,23 @@ def creer_embed_duel(duel_data: Dict):
 
     embed.add_field(name="👤 Créateur", value=f"{duel_data['creator'].display_name}", inline=True)
     embed.add_field(name="💰 Mise", value=f"{duel_data['mise']:,} K", inline=True)
+    # Important: duel_data['players'] contient des ID ici
     embed.add_field(name="👥 Joueurs", value=f"{len(duel_data['players']) + 1}/{duel_data['max_players']}", inline=True)
     embed.add_field(name="🤵 Croupier Assigné", value=croupier_name, inline=False) # Nouveau champ
     
-    joueurs_liste = [f"• {duel_data['creator'].display_name} 👑"] + [f"• {player.display_name}" for player in duel_data["players"]]
+    # Conversion des ID en noms pour l'affichage
+    joueurs_membres = []
+    # On itère sur les ID des joueurs
+    for player_id in duel_data["players"]:
+        # Tente de récupérer l'objet utilisateur (non garanti si l'utilisateur quitte le serveur)
+        member = bot.get_user(player_id) 
+        if member:
+            joueurs_membres.append(member.display_name)
+        else:
+            joueurs_membres.append(f"Utilisateur Inconnu ({player_id})") # Fallback
+            
+    joueurs_liste = [f"• {duel_data['creator'].display_name} 👑"] + [f"• {name}" for name in joueurs_membres]
+    
     embed.add_field(
         name=f"🎮 Participants ({len(joueurs_liste)}/{duel_data['max_players']})",
         value="\n".join(joueurs_liste),
@@ -242,7 +255,7 @@ class CroupierAssignButton(discord.ui.Button):
                  await interaction.response.send_message("ℹ️ Vous êtes déjà assigné(e) à ce duel.", ephemeral=True)
                  return
                  
-            # Si c'est un AUTRE croupier, on bloque le remplacement (NOUVEAU COMPORTEMENT)
+            # Si c'est un AUTRE croupier, on bloque le remplacement (Logique anti-remplacement)
             await interaction.response.send_message(
                 f"❌ Le duel a déjà un Croupier assigné : **{duel_data['croupier_assigne'].display_name}**. Un remplacement n'est pas autorisé.", 
                 ephemeral=True
@@ -282,26 +295,38 @@ class CroupierStartButton(discord.ui.Button):
             await interaction.response.send_message("❌ Ce duel n'existe plus ou est déjà lancé.", ephemeral=True)
             return
             
-        # 2.1. Vérification que le croupier est bien celui qui est assigné (même si tout croupier peut lancer, c'est mieux que ce soit celui assigné)
+        # 2.1. Vérification que le croupier est bien celui qui est assigné 
         if duel_data["croupier_assigne"] is None:
             await interaction.response.send_message("⚠️ Le Croupier doit d'abord s'assigner au duel avec le bouton 🤝 pour confirmer la prise en charge.", ephemeral=True)
             return
             
-        # 2.2. Vérification que le Croupier qui lance est bien celui assigné (facultatif mais recommandé)
+        # 2.2. Vérification que le Croupier qui lance est bien celui assigné 
         if duel_data["croupier_assigne"].id != interaction.user.id:
              await interaction.response.send_message("❌ Seul le Croupier assigné (**" + duel_data["croupier_assigne"].display_name + "**) peut lancer cette partie.", ephemeral=True)
              return
 
 
-        # 3. Vérification du nombre de joueurs
-        total_players = len(duel_data["players"]) + 1 # Créateur + joueurs
+        # 3. Récupération de tous les joueurs (objets Member/User) pour le BlackjackGame
+        
+        # Le créateur est toujours un objet discord.Member (stocké dans 'creator')
+        all_players = [duel_data["creator"]] 
+        
+        # Récupérer les objets discord.User/Member pour les autres joueurs
+        for player_id in duel_data["players"]:
+            # On utilise fetch_user pour être sûr de récupérer l'objet si bot.get_user ne fonctionne pas
+            try:
+                member = await bot.fetch_user(player_id)
+                all_players.append(member)
+            except:
+                # Si l'utilisateur n'existe plus ou est introuvable, on continue sans lui
+                pass
+        
+        total_players = len(all_players)
         if total_players < 2:
             await interaction.response.send_message("❌ Pas assez de joueurs! Attendez qu'au moins 1 joueur rejoigne (min 2 joueurs).", ephemeral=True)
             return
 
-        all_players = [duel_data["creator"]] + duel_data["players"]
-
-        # 4. Créer la partie de blackjack
+        # 4. Créer la partie de blackjack (avec les objets User/Member)
         game = BlackjackGame(all_players, duel_data["mise"])
         game.distribuer_cartes_initiales()
         active_games[game.game_id] = game
@@ -350,7 +375,11 @@ class DuelButton(discord.ui.Button):
             await interaction.response.send_message("❌ Ce duel n'existe plus!", ephemeral=True)
             return
 
-        if interaction.user in duel_data["players"] or interaction.user == duel_data["creator"]:
+        # VÉRIFICATION: Si l'ID est déjà présent (créateur ou joueur)
+        is_creator = interaction.user.id == duel_data["creator"].id
+        is_player = interaction.user.id in duel_data["players"]
+        
+        if is_creator or is_player:
             await interaction.response.send_message("❌ Vous participez déjà à ce duel!", ephemeral=True)
             return
 
@@ -358,10 +387,9 @@ class DuelButton(discord.ui.Button):
             await interaction.response.send_message("❌ Ce duel est complet!", ephemeral=True)
             return
 
-        duel_data["players"].append(interaction.user)
-        # Pas besoin de réassigner, l'objet est modifié en place
+        # Stocke l'ID de l'utilisateur
+        duel_data["players"].append(interaction.user.id)
         
-
         embed = creer_embed_duel(duel_data)
         
         view_to_send = DuelView(self.duel_message_id) # La vue inclut les deux boutons
@@ -676,10 +704,6 @@ async def reset_stats_hebdo():
     if now.weekday() == 0 and now.hour == 0:
         # Réinitialisation des statistiques ici (à implémenter)
         print(f"[{now}] Réinitialisation hebdomadaire des statistiques.")
-        # Exemple : réinitialiser certaines stats si vous le souhaitez
-        # for user_id in player_stats:
-        #     player_stats[user_id]["kamas_joues"] = 0
-        #     player_stats[user_id]["kamas_gagnes"] = 0
         sauvegarder_donnees()
     else:
         print(f"[{now}] Tâche reset_stats_hebdo exécutée, mais pas le bon moment (Lundi 00:00).")
@@ -687,7 +711,6 @@ async def reset_stats_hebdo():
 @reset_stats_hebdo.before_loop
 async def before_reset_stats_hebdo():
     await bot.wait_until_ready()
-    # Logique pour attendre Lundi 00:00 la première fois (non implémentée ici pour simplicité)
     print("La tâche reset_stats_hebdo est prête.")
 
 # --- ÉVÉNEMENTS DU BOT ---
@@ -725,10 +748,10 @@ async def duel(interaction: discord.Interaction, mise: int):
     initial_duel_data = {
         "creator": interaction.user,
         "mise": mise,
-        "players": [],
+        "players": [], # Liste vide d'ID
         "max_players": 4,
-        "message_id": None, # Sera mis à jour après l'envoi
-        "croupier_assigne": None # Nouveau champ
+        "message_id": None, 
+        "croupier_assigne": None 
     }
     
     embed = creer_embed_duel(initial_duel_data)
@@ -758,14 +781,23 @@ async def duel(interaction: discord.Interaction, mise: int):
     active_duels[duel_key] = initial_duel_data
 
 
-@bot.tree.command(name="quitte", description="Quitter un duel (pour les joueurs qui ont rejoint)", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="quitte", description="Quitter ou annuler un duel actif.", guild=discord.Object(id=GUILD_ID))
 async def quitte(interaction: discord.Interaction):
     duel_to_remove = None
     duel_key_to_remove = None
+    is_creator = False # Indicateur pour savoir si c'est le créateur
 
-    # Cherche si l'utilisateur est dans un duel
+    # 1. Cherche si l'utilisateur est un joueur ou le créateur dans un duel actif
     for key, data in active_duels.items():
-        if interaction.user in data["players"]:
+        # VÉRIFICATION: Si l'utilisateur est le créateur
+        if interaction.user.id == data["creator"].id:
+            duel_to_remove = data
+            duel_key_to_remove = key
+            is_creator = True
+            break
+        
+        # VÉRIFICATION: Si l'utilisateur est un joueur (on utilise l'ID pour la stabilité)
+        if interaction.user.id in data["players"]:
             duel_to_remove = data
             duel_key_to_remove = key
             break
@@ -774,30 +806,48 @@ async def quitte(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Vous n'êtes dans aucun duel!", ephemeral=True)
         return
 
-    # Retirer le joueur du duel
-    duel_to_remove["players"].remove(interaction.user)
-    
-    # Mise à jour de l'objet dans le dictionnaire
-    active_duels[duel_key_to_remove] = duel_to_remove
+    # 2. Gestion de l'action
+    if is_creator:
+        # Si c'est le créateur, on annule tout le duel
+        del active_duels[duel_key_to_remove]
+        message_response = f"🚫 Le créateur ({interaction.user.display_name}) a annulé le duel."
+        public_update = f"🚫 Le duel de **{interaction.user.display_name}** a été annulé."
+    else:
+        # Si c'est un joueur, on le retire seulement (on retire l'ID)
+        duel_to_remove["players"].remove(interaction.user.id)
+        # L'objet est modifié en place, pas besoin de réassigner
+        message_response = f"✅ Vous avez quitté le duel de {duel_to_remove['creator'].display_name}."
+        public_update = f"✅ Un joueur a quitté le duel."
+        
+    # 3. Mettre à jour l'embed du duel
+    await interaction.response.defer(ephemeral=True) # Utiliser defer pour l'interaction
 
-    # Mettre à jour l'embed du duel
     try:
         channel = interaction.channel
-        # Utiliser l'ID du message enregistré
-        message = await channel.fetch_message(duel_to_remove["message_id"]) 
+        message = await channel.fetch_message(duel_to_remove["message_id"])
         
-        # Recréer l'embed et la vue
-        embed = creer_embed_duel(duel_to_remove)
-        view_to_send = DuelView(duel_key_to_remove) 
+        if is_creator:
+            # Si annulé, on modifie le message pour indiquer l'annulation
+            await message.edit(content=public_update, embed=None, view=None)
+        else:
+            # Si un joueur quitte, on met à jour l'embed
+            embed = creer_embed_duel(duel_to_remove)
+            view_to_send = DuelView(duel_key_to_remove)
+            await message.edit(embed=embed, view=view_to_send)
+            
+        await interaction.followup.send(message_response, ephemeral=True)
+        
+    except discord.NotFound:
+        # Le message du duel n'existe plus (supprimé par un utilisateur ou par le bot après une partie)
+        print(f"Erreur: Message de duel {duel_to_remove['message_id']} introuvable lors de l'action /quitte.")
+        if is_creator and duel_key_to_remove in active_duels:
+             del active_duels[duel_key_to_remove] # On s'assure que le créateur l'a bien annulé
 
-        await message.edit(embed=embed, view=view_to_send)
-        await interaction.response.send_message(f"✅ Vous avez quitté le duel de {duel_to_remove['creator'].display_name}!", ephemeral=True)
+        await interaction.followup.send(f"✅ Opération réussie. {message_response} (Le message du duel original n'a pu être modifié).", ephemeral=True)
     except Exception as e:
-        # En cas d'erreur de récupération du message (ex: message supprimé)
-        print(f"Erreur lors de la mise à jour du message de duel: {e}")
-        await interaction.response.send_message(f"✅ Vous avez quitté un duel actif (le message a pu être supprimé).", ephemeral=True)
-        if duel_key_to_remove in active_duels:
-             del active_duels[duel_key_to_remove] # On nettoie la liste
+        print(f"Erreur inattendue lors de la mise à jour du message de duel: {e}")
+        await interaction.followup.send(f"⚠️ Une erreur est survenue, mais vous avez bien quitté/annulé le duel.", ephemeral=True)
+
 
 @bot.tree.command(name="stats", description="Voir vos statistiques de jeu avec kamas", guild=discord.Object(id=GUILD_ID))
 async def stats(interaction: discord.Interaction):
