@@ -19,8 +19,8 @@ GUILD_ID = 1366369136648654868
 CHANNEL_ID = 1394960912435122257
 LOG_CHANNEL_ID = 1366384335615164529 
 # ID DU RÔLE CROUPIER (Assurez-vous que cet ID est correct)
-ROLE_CROUPIER_ID = 1297591998517088266 
-ROLE_AUTRE_ID = 1295473800640466944 # Utilisé seulement pour le ping initial
+ROLE_CROUPIER_ID = 1401471414262829066 
+ROLE_AUTRE_ID = 1366378672281620495 # Utilisé seulement pour le ping initial
 
 intents = discord.Intents.default()
 intents.message_content = True
