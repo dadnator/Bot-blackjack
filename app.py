@@ -19,8 +19,8 @@ GUILD_ID = 1366369136648654868
 CHANNEL_ID = 1394960912435122257
 LOG_CHANNEL_ID = 1366384335615164529 
 # ID DU RÔLE CROUPIER (Assurez-vous que cet ID est correct)
-ROLE_CROUPIER_ID = 1297591998517088266 
-ROLE_AUTRE_ID = 1295473800640466944 # Utilisé seulement pour le ping initial
+ROLE_CROUPIER_ID = 1401471414262829066 
+ROLE_AUTRE_ID = 1366378672281620495 # Utilisé seulement pour le ping initial
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -31,6 +31,7 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 DATA_FILE = "blackjack_data.json"
 
 # Stockage des données
+# CHANGEMENT: Clé = message_id pour une meilleure fiabilité
 active_duels = {}     # {message_id: {"creator": user, "mise": int, "players": [], "max_players": 4, "message_id": int}}
 active_games = {}     # {game_id: BlackjackGame object}
 player_stats = {}     # {user_id: {"kamas_joues": int, "kamas_gagnes": int, "parties_gagnees": int, "parties_perdues": int}}
@@ -198,14 +199,9 @@ class CroupierStartButton(discord.ui.Button):
             await interaction.response.send_message("❌ Seul le **Croupier** peut lancer un duel.", ephemeral=True)
             return
 
-        # 2. Chercher le duel via l'ID du message
-        duel_data = None
-        duel_key = None
-        for key, data in active_duels.items():
-            if data["message_id"] == self.duel_message_id:
-                duel_data = data
-                duel_key = key
-                break
+        # 2. Chercher le duel via l'ID du message (Clé stable)
+        duel_key = self.duel_message_id 
+        duel_data = active_duels.get(duel_key)
         
         if not duel_data:
             await interaction.response.send_message("❌ Ce duel n'existe plus ou est déjà lancé.", ephemeral=True)
@@ -261,14 +257,9 @@ class DuelButton(discord.ui.Button):
         self.duel_message_id = duel_message_id
 
     async def callback(self, interaction: discord.Interaction):
-        # Chercher le duel via l'ID du message
-        duel_data = None
-        duel_key = None
-        for key, data in active_duels.items():
-            if data["message_id"] == self.duel_message_id:
-                duel_data = data
-                duel_key = key
-                break
+        # Chercher le duel via l'ID du message (Clé stable)
+        duel_key = self.duel_message_id
+        duel_data = active_duels.get(duel_key)
                 
         if not duel_data:
             await interaction.response.send_message("❌ Ce duel n'existe plus!", ephemeral=True)
@@ -283,7 +274,7 @@ class DuelButton(discord.ui.Button):
             return
 
         duel_data["players"].append(interaction.user)
-        active_duels[duel_key] = duel_data 
+        # Pas besoin de réassigner, l'objet est modifié en place
         
 
         embed = interaction.message.embeds[0]
@@ -480,10 +471,10 @@ async def handle_fin_de_partie(interaction: discord.Interaction, game: Blackjack
     if not gagnants:
         
         mise_recommencee = list(game.mises.values())[0]
-        joueurs_recommences = game.players
+        joueurs_recommencees = game.players
         
         # Créer la nouvelle partie
-        new_game = BlackjackGame(joueurs_recommences, mise_recommencee)
+        new_game = BlackjackGame(joueurs_recommencees, mise_recommencee)
         new_game.distribuer_cartes_initiales()
         active_games[new_game.game_id] = new_game
         
@@ -675,32 +666,36 @@ async def duel(interaction: discord.Interaction, mise: int):
     message = await interaction.followup.send(
         content=roles_ping,
         embed=embed,
-        view=DuelView(interaction.id), 
+        view=DuelView(interaction.id), # On utilise l'ID de l'interaction pour initialiser la vue
         allowed_mentions=allowed_mentions
     )
     
-    # Enregistre l'ID du message pour que les boutons puissent s'y référer
-    duel_id = interaction.id 
+    # CLÉ DU DUEL = ID DU MESSAGE (plus stable)
+    duel_key = message.id
     
-    # Mettre à jour la clé du duel avec le message.id
-    active_duels[duel_id] = {
+    # Mettre à jour la vue avec l'ID du message réel
+    await message.edit(view=DuelView(duel_key)) 
+    
+    # Enregistre le duel avec le message.id comme clé
+    active_duels[duel_key] = {
         "creator": interaction.user,
         "mise": mise,
         "players": [],
         "max_players": 4,
-        "message_id": message.id # On utilise l'ID du message pour la référence
+        "message_id": message.id
     }
 
 
 @bot.tree.command(name="quitte", description="Quitter un duel (pour les joueurs qui ont rejoint)", guild=discord.Object(id=GUILD_ID))
 async def quitte(interaction: discord.Interaction):
     duel_to_remove = None
-    duel_key = None
+    duel_key_to_remove = None
 
+    # Cherche si l'utilisateur est dans un duel
     for key, data in active_duels.items():
         if interaction.user in data["players"]:
             duel_to_remove = data
-            duel_key = key
+            duel_key_to_remove = key
             break
 
     if not duel_to_remove:
@@ -709,6 +704,9 @@ async def quitte(interaction: discord.Interaction):
 
     # Retirer le joueur du duel
     duel_to_remove["players"].remove(interaction.user)
+    
+    # Mise à jour de l'objet dans le dictionnaire
+    active_duels[duel_key_to_remove] = duel_to_remove
 
     # Mettre à jour l'embed du duel
     try:
@@ -729,12 +727,16 @@ async def quitte(interaction: discord.Interaction):
             inline=False
         )
         
-        view_to_send = DuelView(message.id)
+        # La vue est recréée avec le message ID (clé stable)
+        view_to_send = DuelView(duel_key_to_remove) 
 
         await message.edit(embed=embed, view=view_to_send)
         await interaction.response.send_message(f"✅ Vous avez quitté le duel de {duel_to_remove['creator'].display_name}!", ephemeral=True)
     except:
-        await interaction.response.send_message(f"✅ Vous avez quitté le duel!", ephemeral=True)
+        # En cas d'erreur de récupération du message (ex: message supprimé)
+        await interaction.response.send_message(f"✅ Vous avez quitté un duel actif (le message a pu être supprimé).", ephemeral=True)
+        if duel_key_to_remove in active_duels:
+             del active_duels[duel_key_to_remove] # On nettoie la liste
 
 @bot.tree.command(name="stats", description="Voir vos statistiques de jeu avec kamas", guild=discord.Object(id=GUILD_ID))
 async def stats(interaction: discord.Interaction):
@@ -790,7 +792,8 @@ async def duels_actifs(interaction: discord.Interaction):
         
         # Tentative d'obtenir le lien vers le message
         try:
-            message_link = f"[Aller au duel]({interaction.channel.get_partial_message(data['message_id']).jump_url})"
+            # message_id est maintenant la clé (message.id)
+            message_link = f"[Aller au duel]({interaction.channel.get_partial_message(message_id).jump_url})"
         except:
             message_link = "Lien non disponible"
 
